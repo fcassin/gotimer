@@ -55,7 +55,7 @@ func getOSTimerFreq() int64 {
 	return 1000000
 }
 
-func ReadCPUTimer() int64 {
+func readCPUTimer() int64 {
 	cvalue := C.ReadCPUTimer()
 	return int64(cvalue)
 }
@@ -66,7 +66,7 @@ func getCPUTimerFreq(millisecondsToWait int64) int64 {
 		fmt.Printf("   OS Freq: %v (reported)\n", osFrequency)
 	}
 
-	cpuStart := ReadCPUTimer()
+	cpuStart := readCPUTimer()
 	osStart := readOSTimer()
 	var osEnd, osElapsed int64
 	osWaitTime := osFrequency * millisecondsToWait / 1000
@@ -75,7 +75,7 @@ func getCPUTimerFreq(millisecondsToWait int64) int64 {
 		osElapsed = osEnd - osStart
 	}
 
-	cpuEnd := ReadCPUTimer()
+	cpuEnd := readCPUTimer()
 	cpuElapsed := cpuEnd - cpuStart
 	cpuFrequency := osFrequency * cpuElapsed / osElapsed
 
@@ -90,26 +90,31 @@ func getCPUTimerFreq(millisecondsToWait int64) int64 {
 	return cpuFrequency
 }
 
-func Start(name string) {
+/*
+Start begins recording time for the specified anchor name.
+Stop MUST be called with the same anchor name at some point. Deferring the Stop
+call might be a good idea to time a complete block.
+*/
+func Start(anchorName string) {
 	if cpuFrequency == 0 {
 		cpuFrequency = getCPUTimerFreq(50)
 	}
 
-	if len(name) > anchorNameMaxLength {
-		name = name[:anchorNameMaxLength]
+	if len(anchorName) > anchorNameMaxLength {
+		anchorName = anchorName[:anchorNameMaxLength]
 	}
 
 	var startingAnchor *anchor
 	var exists bool
 
-	startingAnchor, exists = anchorByName[name]
+	startingAnchor, exists = anchorByName[anchorName]
 	if !exists {
 		startingAnchor = &anchor{
-			name:   name,
+			name:   anchorName,
 			active: true,
 		}
 
-		anchorByName[name] = startingAnchor
+		anchorByName[anchorName] = startingAnchor
 		index = index + 1
 		anchors[index] = startingAnchor
 
@@ -125,7 +130,7 @@ func Start(name string) {
 	currentAnchor = startingAnchor
 
 	// Clock reading, limit operations as much as possible from now on
-	var current = ReadCPUTimer()
+	var current = readCPUTimer()
 
 	var startingTiming *timing
 	// TODO: Create a large pool of objects and reuse them instead of creating
@@ -152,14 +157,17 @@ func Start(name string) {
 	currentTiming = startingTiming
 }
 
-func Stop(name string) {
-	var end = ReadCPUTimer()
+/*
+Stop ends the recording for the specified anchor name.
+*/
+func Stop(anchorName string) {
+	var end = readCPUTimer()
 
-	if len(name) > anchorNameMaxLength {
-		name = name[:anchorNameMaxLength]
+	if len(anchorName) > anchorNameMaxLength {
+		anchorName = anchorName[:anchorNameMaxLength]
 	}
 
-	var anchor = anchorByName[name]
+	var anchor = anchorByName[anchorName]
 
 	// Note: Anchor is about hierarchy
 	// Note: Timing is about recursion
@@ -185,6 +193,10 @@ func Stop(name string) {
 	totalAnchor.elapsed = float64(totalAnchor.tscount) / float64(cpuFrequency/1000)
 }
 
+/*
+Output displays computed information for the current timer execution, to the
+standard output.
+*/
 func Output() {
 	// NOTE: Should the output be generated here?
 	// Seems weird. It's handy, but maybe timer shouldn't print
