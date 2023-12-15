@@ -10,24 +10,42 @@ import (
 	"time"
 )
 
-const TOTAL_SECTION_NAME = "total"
-const sectionNameMaxLength = 24
+const TOTAL_ANCHOR_NAME = "total"
+const anchorNameMaxLength = 24
 
 var verbose bool
 var cpuFrequency int64
-var timingBySection = make(map[string]*timing)
-var timings = make([]*timing, 0, 10)
 
-var totalTiming = timing{
-	section: TOTAL_SECTION_NAME,
+var index int
+var anchors [1000]*anchor
+var anchorByName = make(map[string]*anchor, 1000)
+
+var totalTiming *timing = &timing{}
+var currentAnchor *anchor
+var currentTiming *timing
+
+var totalAnchor = &anchor{
+	name: TOTAL_ANCHOR_NAME,
 }
 
 type timing struct {
-	section string
-	start   int64
-	end     int64
-	count   int64
+	start int64
+	// Do we need to note the stop time here?
+
+	previous *timing
+	anchor   *anchor
+}
+
+type anchor struct {
+	name    string
+	hits    int64
+	depth   int64
+	tscount int64
 	elapsed float64
+	active  bool
+
+	parent *anchor
+	latest *timing
 }
 
 func readOSTimer() int64 {
@@ -73,47 +91,99 @@ func getCPUTimerFreq(millisecondsToWait int64) int64 {
 	return cpuFrequency
 }
 
-func Start(section string) {
-	// NOTE: Handle a hierarchy of timers
+func Start(name string) {
 	if cpuFrequency == 0 {
 		cpuFrequency = getCPUTimerFreq(50)
 	}
 
-	if len(section) > sectionNameMaxLength {
-		section = section[:sectionNameMaxLength]
+	if len(name) > anchorNameMaxLength {
+		name = name[:anchorNameMaxLength]
 	}
 
-	var sectionTiming = timing{
-		section: section,
+	var startingAnchor *anchor
+	var exists bool
+
+	startingAnchor, exists = anchorByName[name]
+	if !exists {
+		startingAnchor = &anchor{
+			name:   name,
+			active: true,
+		}
+
+		anchorByName[name] = startingAnchor
+		index = index + 1
+		anchors[index] = startingAnchor
+
+		if currentAnchor != nil {
+			startingAnchor.depth = currentAnchor.depth + 1
+		}
+
+		startingAnchor.parent = currentAnchor
 	}
 
-	timings = append(timings, &sectionTiming)
+	// NOTE: Need to keep track of the previous anchor as well?
+	startingAnchor.hits = startingAnchor.hits + 1
+	currentAnchor = startingAnchor
 
-	timingBySection[section] = &sectionTiming
-
+	// Clock reading, limit operations as much as possible from now on
 	var current = ReadCPUTimer()
+
+	var startingTiming *timing
+	// TODO: Create a large pool of objects and reuse them instead of creating
+	// and discarding them regularly? Interesting thing to look at
+	startingTiming = &timing{
+		start:    current,
+		previous: currentTiming,
+		anchor:   startingAnchor,
+	}
+
+	startingAnchor.latest = startingTiming
+
 	if totalTiming.start == 0 {
 		totalTiming.start = current
+		totalTiming.anchor = totalAnchor
+		totalAnchor.latest = totalTiming
 	}
 
-	sectionTiming.start = current
+	if currentTiming != nil {
+		currentTiming.anchor.active = false
+		currentTiming.anchor.tscount = currentTiming.anchor.tscount + current - currentTiming.start
+	}
+
+	currentTiming = startingTiming
 }
 
-func Stop(section string) {
+func Stop(name string) {
 	var end = ReadCPUTimer()
 
-	if len(section) > sectionNameMaxLength {
-		section = section[:sectionNameMaxLength]
+	if len(name) > anchorNameMaxLength {
+		name = name[:anchorNameMaxLength]
 	}
 
-	var timing = timingBySection[section]
-	timing.end = end
-	timing.count = timing.end - timing.start
-	timing.elapsed = float64(timing.count) / float64(cpuFrequency/1000)
+	var anchor = anchorByName[name]
 
-	totalTiming.end = end
-	totalTiming.count = totalTiming.end - totalTiming.start
-	totalTiming.elapsed = float64(totalTiming.count) / float64(cpuFrequency/1000)
+	// Note: Anchor is about hierarchy
+	// Note: Timing is about recursion
+
+	var previousTiming *timing = anchor.latest.previous
+	if previousTiming != nil {
+		previousTiming.start = end
+		previousTiming.anchor.active = true
+	}
+
+	if anchor.parent != nil {
+		anchor.parent.latest.start = end
+		anchor.parent.active = true
+	}
+
+	currentAnchor = anchor.parent
+	currentTiming = previousTiming
+
+	anchor.tscount = anchor.tscount + end - anchor.latest.start
+	anchor.elapsed = float64(anchor.tscount) / float64(cpuFrequency/1000)
+
+	totalAnchor.tscount = end - totalTiming.start
+	totalAnchor.elapsed = float64(totalAnchor.tscount) / float64(cpuFrequency/1000)
 }
 
 func Output() {
@@ -124,14 +194,26 @@ func Output() {
 
 	fmt.Println()
 
-	var padding = strings.Repeat(" ", sectionNameMaxLength-len(totalTiming.section))
-	fmt.Printf("%s%s: %10.3fms (CPU freq: %d)\n", padding, totalTiming.section, totalTiming.elapsed, cpuFrequency)
+	var padding = strings.Repeat(" ", anchorNameMaxLength-len(totalAnchor.name))
+	fmt.Printf("%s%s: %10.3fms (CPU freq: %d)\n", padding, totalAnchor.name,
+		totalAnchor.elapsed, cpuFrequency)
 
-	for _, timing := range timings {
-		var percent = 100 * float64(timing.count) / float64(totalTiming.count)
-		var padding = strings.Repeat(" ", sectionNameMaxLength-len(timing.section))
+	for index, anchor := range anchors {
+		if index == 0 {
+			// Skip the first timing section for now
+			continue
+		}
 
-		fmt.Printf("%s%s: %10.3fms (%5.2f%%)\n", padding, timing.section, timing.elapsed, percent)
+		if anchor == nil {
+			break
+		}
+
+		var percent = 100 * float64(anchor.tscount) / float64(totalAnchor.tscount)
+		var padding = strings.Repeat(" ", anchorNameMaxLength-len(anchor.name))
+		var parentPadding = strings.Repeat(" ", 2*int(anchor.depth))
+
+		fmt.Printf("%s%s: %10.3fms (%5.2f%%) %d\n", padding+parentPadding, anchor.name,
+			anchor.elapsed, percent, anchor.hits)
 	}
 }
 
