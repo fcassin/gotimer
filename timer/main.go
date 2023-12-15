@@ -6,12 +6,11 @@ package timer
 import "C"
 import (
 	"fmt"
-	"strings"
 	"time"
 )
 
 const TOTAL_ANCHOR_NAME = "total"
-const anchorNameMaxLength = 24
+const anchorNameMaxLength = 12
 
 var verbose bool
 var cpuFrequency int64
@@ -194,8 +193,8 @@ func Output() {
 
 	fmt.Println()
 
-	var padding = strings.Repeat(" ", anchorNameMaxLength-len(totalAnchor.name))
-	fmt.Printf("%s%s: %10.3fms (CPU freq: %d)\n", padding, totalAnchor.name,
+	var padding = anchorNameMaxLength
+	fmt.Printf("%*s: %10.3fms (CPU freq: %d)\n", padding, totalAnchor.name,
 		totalAnchor.elapsed, cpuFrequency)
 
 	for index, anchor := range anchors {
@@ -209,10 +208,9 @@ func Output() {
 		}
 
 		var percent = 100 * float64(anchor.tscount) / float64(totalAnchor.tscount)
-		var padding = strings.Repeat(" ", anchorNameMaxLength-len(anchor.name))
-		var parentPadding = strings.Repeat(" ", 2*int(anchor.depth))
+		var padding = anchorNameMaxLength + 2*anchor.depth
 
-		fmt.Printf("%s%s: %10.3fms (%5.2f%%) %d\n", padding+parentPadding, anchor.name,
+		fmt.Printf("%*s: %10.3fms (%5.2f%%) %d\n", padding, anchor.name,
 			anchor.elapsed, percent, anchor.hits)
 	}
 }
