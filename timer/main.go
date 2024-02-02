@@ -6,18 +6,23 @@ package timer
 import "C"
 import (
 	"fmt"
+	"os"
 	"time"
 )
 
+const TIMER_ENV_VAR = "TIMER"
+
 const TOTAL_ANCHOR_NAME = "total"
-const anchorNameMaxLength = 12
+const anchorNameMaxLength = 18
+
+const maxHandledAnchors = 1000
 
 var verbose bool
 var cpuFrequency int64
 
 var index int
-var anchors [1000]*anchor
-var anchorByName = make(map[string]*anchor, 1000)
+var anchors []*anchor = make([]*anchor, maxHandledAnchors)
+var anchorsByName = make(map[string]*anchor, maxHandledAnchors)
 
 var totalTiming *timing = &timing{}
 var currentAnchor *anchor
@@ -36,12 +41,15 @@ type timing struct {
 }
 
 type anchor struct {
-	name    string
 	hits    int64
 	depth   int64
 	tscount int64
+	bytes   int64
 	elapsed float64
-	active  bool
+
+	name string
+
+	active bool
 
 	parent *anchor
 	latest *timing
@@ -90,12 +98,38 @@ func getCPUTimerFreq(millisecondsToWait int64) int64 {
 	return cpuFrequency
 }
 
+// NOTE: Do we need an init function?
+// Reset fullfills a similar role, might simply rename it?
+func Reset() {
+	index = 0
+	anchors = make([]*anchor, maxHandledAnchors)
+	anchorsByName = make(map[string]*anchor, maxHandledAnchors)
+
+	totalTiming = &timing{}
+	currentAnchor = nil
+	currentTiming = nil
+
+	totalAnchor = &anchor{
+		name: TOTAL_ANCHOR_NAME,
+	}
+}
+
 /*
 Start begins recording time for the specified anchor name.
 Stop MUST be called with the same anchor name at some point. Deferring the Stop
 call might be a good idea to time a complete block.
+
+Profiler can be disabled by setting TIMER env variable to "0".
 */
 func Start(anchorName string) {
+	StartThroughput(anchorName, 0)
+}
+
+func StartThroughput(anchorName string, processedBytes int64) {
+	if os.Getenv(TIMER_ENV_VAR) == "0" {
+		return
+	}
+
 	if cpuFrequency == 0 {
 		cpuFrequency = getCPUTimerFreq(50)
 	}
@@ -107,14 +141,14 @@ func Start(anchorName string) {
 	var startingAnchor *anchor
 	var exists bool
 
-	startingAnchor, exists = anchorByName[anchorName]
+	startingAnchor, exists = anchorsByName[anchorName]
 	if !exists {
 		startingAnchor = &anchor{
 			name:   anchorName,
 			active: true,
 		}
 
-		anchorByName[anchorName] = startingAnchor
+		anchorsByName[anchorName] = startingAnchor
 		index = index + 1
 		anchors[index] = startingAnchor
 
@@ -127,6 +161,7 @@ func Start(anchorName string) {
 
 	// NOTE: Need to keep track of the previous anchor as well?
 	startingAnchor.hits = startingAnchor.hits + 1
+	startingAnchor.bytes = startingAnchor.bytes + processedBytes
 	currentAnchor = startingAnchor
 
 	// Clock reading, limit operations as much as possible from now on
@@ -161,13 +196,17 @@ func Start(anchorName string) {
 Stop ends the recording for the specified anchor name.
 */
 func Stop(anchorName string) {
+	if os.Getenv(TIMER_ENV_VAR) == "0" {
+		return
+	}
+
 	var end = readCPUTimer()
 
 	if len(anchorName) > anchorNameMaxLength {
 		anchorName = anchorName[:anchorNameMaxLength]
 	}
 
-	var anchor = anchorByName[anchorName]
+	var anchor = anchorsByName[anchorName]
 
 	// Note: Anchor is about hierarchy
 	// Note: Timing is about recursion
@@ -198,6 +237,10 @@ Output displays computed information for the current timer execution, to the
 standard output.
 */
 func Output() {
+	if os.Getenv(TIMER_ENV_VAR) == "0" {
+		return
+	}
+
 	// NOTE: Should the output be generated here?
 	// Seems weird. It's handy, but maybe timer shouldn't print
 	// directly and should return data to the calling code
@@ -222,14 +265,16 @@ func Output() {
 		var percent = 100 * float64(anchor.tscount) / float64(totalAnchor.tscount)
 		var padding = anchorNameMaxLength + 2*anchor.depth
 
-		fmt.Printf("%*s: %10.3fms (%5.2f%%) %d\n", padding, anchor.name,
-			anchor.elapsed, percent, anchor.hits)
+		if anchor.bytes == 0 {
+			fmt.Printf("%*s: %10.3fms (%5.2f%%) -- calls: %d\n", padding, anchor.name,
+				anchor.elapsed, percent, anchor.hits)
+		} else {
+			var megabytes = float64(anchor.bytes) / (1024 * 1024)
+			var gigabytes = float64(anchor.bytes) / (1024 * 1024 * 1024)
+			var throughput = gigabytes / (float64(anchor.tscount) / float64(cpuFrequency))
+
+			fmt.Printf("%*s: %10.3fms (%5.2f%%) -- calls: %d, %7.2fMB at %5.3fGB/s\n",
+				padding, anchor.name, anchor.elapsed, percent, anchor.hits, megabytes, throughput)
+		}
 	}
-}
-
-func main() {
-	verbose = true
-	var millisecondsToWait int64 = 10
-
-	getCPUTimerFreq(millisecondsToWait)
 }
