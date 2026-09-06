@@ -55,35 +55,40 @@ type anchor struct {
 	latest *timing
 }
 
-func readOSTimer() int64 {
+// ReadOSTimer returns the current OS wall-clock time, in microseconds.
+func ReadOSTimer() int64 {
 	return time.Now().UnixMicro()
 }
 
-func getOSTimerFreq() int64 {
+// GetOSTimerFreq returns the tick frequency of ReadOSTimer, in Hz.
+func GetOSTimerFreq() int64 {
 	return 1000000
 }
 
-func readCPUTimer() int64 {
+// ReadCPUTimer returns the current CPU timestamp counter value.
+func ReadCPUTimer() int64 {
 	cvalue := C.ReadCPUTimer()
 	return int64(cvalue)
 }
 
-func getCPUTimerFreq(millisecondsToWait int64) int64 {
-	osFrequency := getOSTimerFreq()
+// GetCPUTimerFreq estimates the CPU timer frequency, in Hz, by comparing
+// it against the OS timer over the given wait period.
+func GetCPUTimerFreq(millisecondsToWait int64) int64 {
+	osFrequency := GetOSTimerFreq()
 	if verbose {
 		fmt.Printf("   OS Freq: %v (reported)\n", osFrequency)
 	}
 
-	cpuStart := readCPUTimer()
-	osStart := readOSTimer()
+	cpuStart := ReadCPUTimer()
+	osStart := ReadOSTimer()
 	var osEnd, osElapsed int64
 	osWaitTime := osFrequency * millisecondsToWait / 1000
 	for osElapsed < osWaitTime {
-		osEnd = readOSTimer()
+		osEnd = ReadOSTimer()
 		osElapsed = osEnd - osStart
 	}
 
-	cpuEnd := readCPUTimer()
+	cpuEnd := ReadCPUTimer()
 	cpuElapsed := cpuEnd - cpuStart
 	cpuFrequency := osFrequency * cpuElapsed / osElapsed
 
@@ -131,7 +136,7 @@ func StartThroughput(anchorName string, processedBytes int64) {
 	}
 
 	if cpuFrequency == 0 {
-		cpuFrequency = getCPUTimerFreq(50)
+		cpuFrequency = GetCPUTimerFreq(50)
 	}
 
 	if len(anchorName) > anchorNameMaxLength {
@@ -165,7 +170,7 @@ func StartThroughput(anchorName string, processedBytes int64) {
 	currentAnchor = startingAnchor
 
 	// Clock reading, limit operations as much as possible from now on
-	var current = readCPUTimer()
+	var current = ReadCPUTimer()
 
 	var startingTiming *timing
 	// TODO: Create a large pool of objects and reuse them instead of creating
@@ -200,7 +205,7 @@ func Stop(anchorName string) {
 		return
 	}
 
-	var end = readCPUTimer()
+	var end = ReadCPUTimer()
 
 	if len(anchorName) > anchorNameMaxLength {
 		anchorName = anchorName[:anchorNameMaxLength]
